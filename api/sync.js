@@ -2,35 +2,40 @@ export const config = {
   runtime: 'edge'
 };
 
-// 简单的内存存储（Vercel Edge 每次冷启动会清空，但足够个人使用）
-// 如需持久化，可接入 Upstash Redis
-const storage = new Map();
+const UPSTASH_URL = 'https://selected-monkey-148490.upstash.io';
+const UPSTASH_TOKEN = 'gQAAAAAAAkQKAAIgcDExMTUxZWYyNjk4MDQ0MGY0YTRlZmZhMjQ3MzUwMGU3Zg';
+
+async function redisCommand(cmd, ...args) {
+  const res = await fetch(`${UPSTASH_URL}/${cmd}/${args.join('/')}`, {
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
+  });
+  return res.json();
+}
 
 export default async function handler(request) {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
-
+  
   if (!code || code.length < 4) {
     return new Response(JSON.stringify({ error: 'Invalid code' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   }
-
+  
   const key = 'memo:' + code;
-
-  // CORS 头
+  
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Content-Type': 'application/json'
   };
-
+  
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
-
+  
   if (request.method === 'POST') {
     try {
       const body = await request.json();
@@ -39,33 +44,29 @@ export default async function handler(request) {
           status: 400, headers: corsHeaders
         });
       }
-      storage.set(key, {
-        payload: body.payload,
-        timestamp: Date.now()
-      });
+      await redisCommand('set', key, encodeURIComponent(body.payload));
       return new Response(JSON.stringify({ success: true }), {
         status: 200, headers: corsHeaders
       });
     } catch (e) {
-      return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
+      return new Response(JSON.stringify({ error: e.message }), {
         status: 400, headers: corsHeaders
       });
     }
   }
-
+  
   if (request.method === 'GET') {
-    const data = storage.get(key);
-    if (data) {
+    const result = await redisCommand('get', key);
+    if (result.result) {
       return new Response(JSON.stringify({
-        payload: data.payload,
-        timestamp: data.timestamp
+        payload: decodeURIComponent(result.result)
       }), { status: 200, headers: corsHeaders });
     }
     return new Response(JSON.stringify({ payload: null }), {
       status: 200, headers: corsHeaders
     });
   }
-
+  
   return new Response(JSON.stringify({ error: 'Method not allowed' }), {
     status: 405, headers: corsHeaders
   });
