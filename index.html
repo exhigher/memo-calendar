@@ -186,8 +186,6 @@ body {
 .btn-primary:active { opacity: 0.85; }
 .btn-secondary { background: #f0f0f0; color: #555; }
 .btn-secondary:active { background: #e0e0e0; }
-.btn-danger { background: var(--urgent); color: #fff; }
-.btn-danger:active { opacity: 0.85; }
 
 @supports (-webkit-touch-callout: none) {
   body { padding-top: max(20px, var(--safe-top)); }
@@ -240,7 +238,6 @@ body {
 </head>
 <body>
 
-<!-- 首次使用：设置同步码 -->
 <div class="setup-overlay" id="setupOverlay">
   <div class="setup-box">
     <h2>🔐 欢迎使用备忘录日历</h2>
@@ -324,16 +321,12 @@ const ENC = {
     const key = await this.deriveKey(password, salt);
     const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(text));
     const buf = new Uint8Array(salt.length + iv.length + ciphertext.byteLength);
-    buf.set(salt, 0);
-    buf.set(iv, salt.length);
-    buf.set(new Uint8Array(ciphertext), salt.length + iv.length);
+    buf.set(salt, 0); buf.set(iv, salt.length); buf.set(new Uint8Array(ciphertext), salt.length + iv.length);
     return btoa(String.fromCharCode(...buf));
   },
   async decrypt(base64, password) {
     const buf = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-    const salt = buf.slice(0, 16);
-    const iv = buf.slice(16, 28);
-    const ciphertext = buf.slice(28);
+    const salt = buf.slice(0, 16), iv = buf.slice(16, 28), ciphertext = buf.slice(28);
     const key = await this.deriveKey(password, salt);
     const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
     return new TextDecoder().decode(decrypted);
@@ -342,47 +335,29 @@ const ENC = {
 
 // ==================== 全局状态 ====================
 let currentDate = new Date();
-let selectedDateKey = null;
-let selectedPriority = 'normal';
-let editingIdx = null;
-let tasks = {};
-let syncCode = null;
-let syncPassword = null;
+let selectedDateKey = null, selectedPriority = 'normal', editingIdx = null;
+let tasks = {}, syncCode = null, syncPassword = null;
 const colors = { urgent: '#e74c3c', important: '#f39c12', normal: '#3498db', low: '#95a5a6' };
 const API_BASE = location.origin + '/api/sync';
 
 function showToast(msg) {
   const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
+  t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2000);
 }
 
-// ==================== 初始化 ====================
 function init() {
   const saved = localStorage.getItem('memoSyncCode');
-  if (saved) {
-    syncCode = saved;
-    syncPassword = saved;
-    document.getElementById('setupOverlay').style.display = 'none';
-    showApp();
-    loadLocalData();
-    renderCalendar();
-    syncNow(true);
-  }
+  if (saved) { syncCode = saved; syncPassword = saved; document.getElementById('setupOverlay').style.display = 'none'; showApp(); loadLocalData(); renderCalendar(); syncNow(true); }
 }
 
 function doSetup() {
   const code = document.getElementById('setupCode').value.trim();
   if (code.length < 4) { showToast('同步码至少4位'); return; }
-  syncCode = code;
-  syncPassword = code;
+  syncCode = code; syncPassword = code;
   localStorage.setItem('memoSyncCode', syncCode);
   document.getElementById('setupOverlay').style.display = 'none';
-  showApp();
-  tasks = {};
-  saveLocalData();
-  renderCalendar();
+  showApp(); tasks = {}; saveLocalData(); renderCalendar();
   showToast('同步码已设置: ' + syncCode);
 }
 
@@ -395,10 +370,8 @@ function showApp() {
 }
 
 function loadLocalData() {
-  try {
-    const saved = localStorage.getItem('memoTasks_' + syncCode);
-    if (saved) tasks = JSON.parse(saved);
-  } catch(e) { tasks = {}; }
+  try { const saved = localStorage.getItem('memoTasks_' + syncCode); if (saved) tasks = JSON.parse(saved); }
+  catch(e) { tasks = {}; }
 }
 
 function saveLocalData() {
@@ -410,97 +383,70 @@ async function syncNow(silent) {
   const btn = document.getElementById('syncBtn');
   const status = document.getElementById('syncStatus');
   const text = document.getElementById('syncText');
-
-  btn.disabled = true;
-  status.className = 'sync-status syncing';
-  text.textContent = '同步中...';
+  btn.disabled = true; status.className = 'sync-status syncing'; text.textContent = '同步中...';
 
   try {
-    // 1. 先上传本地数据
+    // 上传
     const payload = JSON.stringify({ data: tasks, timestamp: Date.now() });
     const encrypted = await ENC.encrypt(payload, syncPassword);
-
     const uploadRes = await fetch(API_BASE + '?code=' + encodeURIComponent(syncCode), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ payload: encrypted })
     });
+    if (!uploadRes.ok) throw new Error('上传失败 ' + uploadRes.status);
 
-    if (!uploadRes.ok) throw new Error('上传失败');
-
-    // 2. 再下载云端数据（合并逻辑：以时间戳较新的为准）
+    // 下载
     const downloadRes = await fetch(API_BASE + '?code=' + encodeURIComponent(syncCode));
-    if (downloadRes.ok) {
-      const result = await downloadRes.json();
-      if (result.payload) {
-        const decrypted = await ENC.decrypt(result.payload, syncPassword);
-        const cloudData = JSON.parse(decrypted);
-        if (cloudData.data && cloudData.timestamp) {
-          const localTime = parseInt(localStorage.getItem('memoSyncTime_' + syncCode) || '0');
-          if (cloudData.timestamp > localTime) {
-            tasks = cloudData.data;
-            saveLocalData();
-            localStorage.setItem('memoSyncTime_' + syncCode, cloudData.timestamp);
-            renderCalendar();
-            if (!silent) showToast('已同步云端数据');
-          } else {
-            if (!silent) showToast('本地数据已是最新');
-          }
+    if (!downloadRes.ok) throw new Error('下载失败 ' + downloadRes.status);
+    const result = await downloadRes.json();
+
+    if (result.payload) {
+      const decrypted = await ENC.decrypt(result.payload, syncPassword);
+      const cloudData = JSON.parse(decrypted);
+      if (cloudData.data && cloudData.timestamp) {
+        const localTime = parseInt(localStorage.getItem('memoSyncTime_' + syncCode) || '0');
+        if (cloudData.timestamp > localTime) {
+          tasks = cloudData.data; saveLocalData();
+          localStorage.setItem('memoSyncTime_' + syncCode, cloudData.timestamp);
+          renderCalendar();
+          if (!silent) showToast('已同步云端数据');
+        } else {
+          if (!silent) showToast('本地数据已是最新');
         }
-      } else {
-        if (!silent) showToast('云端暂无数据，已上传');
       }
+    } else {
+      if (!silent) showToast('云端暂无数据，已上传');
     }
-
     localStorage.setItem('memoSyncTime_' + syncCode, Date.now().toString());
-    status.className = 'sync-status online';
-    text.textContent = '已同步';
+    status.className = 'sync-status online'; text.textContent = '已同步';
   } catch(err) {
-    status.className = 'sync-status';
-    text.textContent = '同步失败';
+    status.className = 'sync-status'; text.textContent = '同步失败';
     if (!silent) showToast('同步失败: ' + err.message);
+    console.error('Sync error:', err);
   }
-
-  btn.disabled = false;
-  btn.textContent = '↻ 同步';
+  btn.disabled = false; btn.textContent = '↻ 同步';
 }
 
-// ==================== 日历渲染 ====================
-function changeMonth(delta) {
-  currentDate.setMonth(currentDate.getMonth() + delta);
-  renderCalendar();
-}
+// ==================== 日历 ====================
+function changeMonth(delta) { currentDate.setMonth(currentDate.getMonth() + delta); renderCalendar(); }
 
 function renderCalendar() {
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
+  const year = currentDate.getFullYear(), month = currentDate.getMonth();
   document.getElementById('monthTitle').textContent = year + '年 ' + (month + 1) + '月';
-  const grid = document.getElementById('daysGrid');
-  grid.innerHTML = '';
-  const firstDay = new Date(year, month, 1);
-  const lastDay = new Date(year, month + 1, 0);
-  const startOffset = firstDay.getDay();
-  const totalDays = lastDay.getDate();
-  const prevLastDay = new Date(year, month, 0).getDate();
-  const today = new Date();
+  const grid = document.getElementById('daysGrid'); grid.innerHTML = '';
+  const firstDay = new Date(year, month, 1), lastDay = new Date(year, month + 1, 0);
+  const startOffset = firstDay.getDay(), totalDays = lastDay.getDate();
+  const prevLastDay = new Date(year, month, 0).getDate(), today = new Date();
 
-  for (let i = startOffset - 1; i >= 0; i--) {
-    grid.appendChild(createDayCell(year, month - 1, prevLastDay - i, true));
-  }
+  for (let i = startOffset - 1; i >= 0; i--) grid.appendChild(createDayCell(year, month - 1, prevLastDay - i, true));
   for (let d = 1; d <= totalDays; d++) {
     const cell = createDayCell(year, month, d, false);
-    if (year === today.getFullYear() && month === today.getMonth() && d === today.getDate()) {
-      cell.classList.add('today');
-    }
-    if (new Date(year, month, d).getDay() === 0 || new Date(year, month, d).getDay() === 6) {
-      cell.classList.add('weekend');
-    }
+    if (year === today.getFullYear() && month === today.getMonth() && d === today.getDate()) cell.classList.add('today');
+    if (new Date(year, month, d).getDay() === 0 || new Date(year, month, d).getDay() === 6) cell.classList.add('weekend');
     grid.appendChild(cell);
   }
   const remaining = (7 - ((startOffset + totalDays) % 7)) % 7;
-  for (let d = 1; d <= remaining; d++) {
-    grid.appendChild(createDayCell(year, month + 1, d, true));
-  }
+  for (let d = 1; d <= remaining; d++) grid.appendChild(createDayCell(year, month + 1, d, true));
 }
 
 function createDayCell(year, month, day, otherMonth) {
@@ -512,8 +458,7 @@ function createDayCell(year, month, day, otherMonth) {
   if (tasks[key]) {
     tasks[key].forEach(function(t, idx) {
       const item = document.createElement('div');
-      item.className = 'task-item';
-      item.style.background = colors[t.priority];
+      item.className = 'task-item'; item.style.background = colors[t.priority];
       item.innerHTML = '<span class="task-num">' + (idx + 1) + '</span><span class="task-text">' + escapeHtml(t.text) + '</span><span class="del" onclick="deleteTask(&quot;' + key + '&quot;,' + idx + ',event)">✕</span>';
       item.onclick = function(e) { if (e.target.classList.contains('del')) return; editTask(key, idx); };
       list.appendChild(item);
@@ -522,90 +467,51 @@ function createDayCell(year, month, day, otherMonth) {
   return cell;
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
+function escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
 
 function openModal(key) {
-  selectedDateKey = key;
-  editingIdx = null;
+  selectedDateKey = key; editingIdx = null;
   document.getElementById('modalTitle').textContent = key + ' 添加事项';
   document.getElementById('taskInput').value = '';
-  document.querySelectorAll('.priority-btn').forEach(function(b) {
-    b.classList.toggle('selected', b.dataset.p === 'normal');
-  });
-  selectedPriority = 'normal';
-  document.getElementById('modal').classList.add('active');
+  document.querySelectorAll('.priority-btn').forEach(function(b) { b.classList.toggle('selected', b.dataset.p === 'normal'); });
+  selectedPriority = 'normal'; document.getElementById('modal').classList.add('active');
   setTimeout(function() { document.getElementById('taskInput').focus(); }, 100);
 }
 
 function editTask(key, idx) {
-  selectedDateKey = key;
-  editingIdx = idx;
-  const t = tasks[key][idx];
+  selectedDateKey = key; editingIdx = idx; const t = tasks[key][idx];
   document.getElementById('modalTitle').textContent = key + ' 编辑事项';
   document.getElementById('taskInput').value = t.text;
-  document.querySelectorAll('.priority-btn').forEach(function(b) {
-    b.classList.toggle('selected', b.dataset.p === t.priority);
-  });
-  selectedPriority = t.priority;
-  document.getElementById('modal').classList.add('active');
+  document.querySelectorAll('.priority-btn').forEach(function(b) { b.classList.toggle('selected', b.dataset.p === t.priority); });
+  selectedPriority = t.priority; document.getElementById('modal').classList.add('active');
   setTimeout(function() { document.getElementById('taskInput').focus(); }, 100);
 }
 
-function closeModal() {
-  document.getElementById('modal').classList.remove('active');
-  editingIdx = null;
-}
+function closeModal() { document.getElementById('modal').classList.remove('active'); editingIdx = null; }
 
 function selectP(btn) {
   document.querySelectorAll('.priority-btn').forEach(function(b) { b.classList.remove('selected'); });
-  btn.classList.add('selected');
-  selectedPriority = btn.dataset.p;
+  btn.classList.add('selected'); selectedPriority = btn.dataset.p;
 }
 
 function saveTask() {
   const text = document.getElementById('taskInput').value.trim();
   if (!text) { showToast('请输入内容'); return; }
   if (!tasks[selectedDateKey]) tasks[selectedDateKey] = [];
-  if (editingIdx !== null) {
-    tasks[selectedDateKey][editingIdx] = { text: text, priority: selectedPriority };
-    showToast('已修改');
-  } else {
-    tasks[selectedDateKey].push({ text: text, priority: selectedPriority });
-    showToast('已添加');
-  }
-  saveLocalData();
-  closeModal();
-  renderCalendar();
-  syncNow(true);
+  if (editingIdx !== null) { tasks[selectedDateKey][editingIdx] = { text: text, priority: selectedPriority }; showToast('已修改'); }
+  else { tasks[selectedDateKey].push({ text: text, priority: selectedPriority }); showToast('已添加'); }
+  saveLocalData(); closeModal(); renderCalendar(); syncNow(true);
 }
 
 function deleteTask(key, idx, e) {
-  e.stopPropagation();
-  tasks[key].splice(idx, 1);
+  e.stopPropagation(); tasks[key].splice(idx, 1);
   if (tasks[key].length === 0) delete tasks[key];
-  saveLocalData();
-  renderCalendar();
-  showToast('已删除');
-  syncNow(true);
+  saveLocalData(); renderCalendar(); showToast('已删除'); syncNow(true);
 }
 
-document.getElementById('modal').addEventListener('click', function(e) {
-  if (e.target === document.getElementById('modal')) closeModal();
-});
-
-document.body.addEventListener('touchmove', function(e) {
-  if (e.target.closest('.modal')) return;
-  if (document.getElementById('modal').classList.contains('active')) {
-    e.preventDefault();
-  }
-}, { passive: false });
-
+document.getElementById('modal').addEventListener('click', function(e) { if (e.target === document.getElementById('modal')) closeModal(); });
+document.body.addEventListener('touchmove', function(e) { if (e.target.closest('.modal')) return; if (document.getElementById('modal').classList.contains('active')) e.preventDefault(); }, { passive: false });
 init();
 </script>
-
 </body>
 </html>
