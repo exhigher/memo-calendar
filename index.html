@@ -124,10 +124,13 @@ body {
   margin-bottom: 12px; padding: 10px 14px;
   background: var(--card); border-radius: var(--radius);
   box-shadow: var(--shadow); border: 1px solid var(--border);
+  flex-wrap: wrap; gap: 8px;
 }
 .sync-info { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-light); flex-wrap: wrap; }
-.sync-status { width: 8px; height: 8px; border-radius: 50%; background: #2ecc71; }
-.sync-status.offline { background: var(--low); }
+.sync-status { width: 8px; height: 8px; border-radius: 50%; background: var(--low); }
+.sync-status.online { background: #2ecc71; }
+.sync-status.syncing { background: var(--important); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 .sync-btn {
   padding: 6px 14px; border-radius: 8px; border: none;
   background: var(--normal); color: #fff; font-size: 12px;
@@ -159,12 +162,12 @@ body {
   to { transform: translateY(0); opacity: 1; }
 }
 .modal h3 { margin: 0 0 14px 0; color: var(--text); font-size: 18px; }
-.modal input {
+.modal input, .modal select {
   width: 100%; padding: 12px 14px; border: 1.5px solid var(--border);
   border-radius: 12px; font-size: 15px; margin-bottom: 12px;
   -webkit-appearance: none; appearance: none;
 }
-.modal input:focus { outline: none; border-color: var(--normal); }
+.modal input:focus, .modal select:focus { outline: none; border-color: var(--normal); }
 .priority-options { display: flex; gap: 8px; margin-bottom: 16px; }
 .priority-btn {
   flex: 1; padding: 10px 4px; border: 2px solid transparent;
@@ -183,6 +186,8 @@ body {
 .btn-primary:active { opacity: 0.85; }
 .btn-secondary { background: #f0f0f0; color: #555; }
 .btn-secondary:active { background: #e0e0e0; }
+.btn-danger { background: var(--urgent); color: #fff; }
+.btn-danger:active { opacity: 0.85; }
 
 @supports (-webkit-touch-callout: none) {
   body { padding-top: max(20px, var(--safe-top)); }
@@ -198,7 +203,6 @@ body {
 }
 
 @media (max-height: 500px) and (orientation: landscape) {
-  .days-grid { grid-template-columns: repeat(7, 1fr); }
   .day-cell { min-height: 60px; }
 }
 
@@ -211,26 +215,58 @@ body {
   white-space: nowrap;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.setup-overlay {
+  position: fixed; inset: 0; background: var(--bg);
+  display: flex; justify-content: center; align-items: center;
+  z-index: 300;
+}
+.setup-box {
+  background: var(--card); border-radius: var(--radius);
+  padding: 32px 24px; width: 90%; max-width: 360px;
+  box-shadow: var(--shadow); border: 1px solid var(--border);
+  text-align: center;
+}
+.setup-box h2 { margin-bottom: 8px; color: var(--text); }
+.setup-box p { color: var(--text-light); font-size: 14px; margin-bottom: 20px; }
+.setup-box input {
+  width: 100%; padding: 12px 14px; border: 1.5px solid var(--border);
+  border-radius: 12px; font-size: 15px; margin-bottom: 12px;
+  text-align: center; letter-spacing: 2px;
+}
+.setup-box input:focus { outline: none; border-color: var(--normal); }
+.setup-box .hint { font-size: 12px; color: var(--text-light); margin-top: 12px; }
 </style>
 </head>
 <body>
 
-<div class="sync-bar">
-  <div class="sync-info">
-    <div class="sync-status" id="syncStatus"></div>
-    <span id="syncText">本地存储</span>
-    <span class="sync-code" id="syncCode" style="display:none"></span>
+<!-- 首次使用：设置同步码 -->
+<div class="setup-overlay" id="setupOverlay">
+  <div class="setup-box">
+    <h2>🔐 欢迎使用备忘录日历</h2>
+    <p>设置你的专属同步码，用于加密数据并在多设备同步</p>
+    <input type="text" id="setupCode" placeholder="输入同步码（至少4位）" maxlength="20" onkeydown="if(event.key==='Enter')doSetup()">
+    <button class="btn-primary" style="width:100%;padding:12px;border-radius:12px;border:none;font-size:15px;font-weight:600;cursor:pointer;" onclick="doSetup()">开始使用</button>
+    <p class="hint">同步码用于加密你的数据，请牢记<br>不同同步码 = 完全隔离的数据空间</p>
   </div>
-  <button class="sync-btn" id="syncBtn" onclick="toggleSync()">生成同步码</button>
 </div>
 
-<div class="app-header">
+<div class="sync-bar" id="syncBar" style="display:none">
+  <div class="sync-info">
+    <div class="sync-status" id="syncStatus"></div>
+    <span id="syncText">未同步</span>
+    <span class="sync-code" id="syncCode"></span>
+  </div>
+  <button class="sync-btn" id="syncBtn" onclick="syncNow()">↻ 同步</button>
+</div>
+
+<div class="app-header" id="appHeader" style="display:none">
   <button class="nav-btn" onclick="changeMonth(-1)">◀</button>
   <div class="month-title" id="monthTitle"></div>
   <button class="nav-btn" onclick="changeMonth(1)">▶</button>
 </div>
 
-<div class="weekdays">
+<div class="weekdays" id="weekdays" style="display:none">
   <div class="weekday">日</div>
   <div class="weekday">一</div>
   <div class="weekday">二</div>
@@ -242,7 +278,7 @@ body {
 
 <div class="days-grid" id="daysGrid"></div>
 
-<div class="legend">
+<div class="legend" id="legend" style="display:none">
   <div class="legend-item"><div class="legend-dot" style="background:var(--urgent)"></div>紧急</div>
   <div class="legend-item"><div class="legend-dot" style="background:var(--important)"></div>重要</div>
   <div class="legend-item"><div class="legend-dot" style="background:var(--normal)"></div>普通</div>
@@ -269,13 +305,51 @@ body {
 <div class="toast" id="toast"></div>
 
 <script>
+// ==================== 加密工具 ====================
+const ENC = {
+  async deriveKey(password, salt) {
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveKey']
+    );
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: salt, iterations: 100000, hash: 'SHA-256' },
+      keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+    );
+  },
+  async encrypt(text, password) {
+    const enc = new TextEncoder();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await this.deriveKey(password, salt);
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(text));
+    const buf = new Uint8Array(salt.length + iv.length + ciphertext.byteLength);
+    buf.set(salt, 0);
+    buf.set(iv, salt.length);
+    buf.set(new Uint8Array(ciphertext), salt.length + iv.length);
+    return btoa(String.fromCharCode(...buf));
+  },
+  async decrypt(base64, password) {
+    const buf = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const salt = buf.slice(0, 16);
+    const iv = buf.slice(16, 28);
+    const ciphertext = buf.slice(28);
+    const key = await this.deriveKey(password, salt);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    return new TextDecoder().decode(decrypted);
+  }
+};
+
+// ==================== 全局状态 ====================
 let currentDate = new Date();
 let selectedDateKey = null;
 let selectedPriority = 'normal';
 let editingIdx = null;
-const colors = { urgent: '#e74c3c', important: '#f39c12', normal: '#3498db', low: '#95a5a6' };
 let tasks = {};
-let syncCode = localStorage.getItem('memoSyncCode') || null;
+let syncCode = null;
+let syncPassword = null;
+const colors = { urgent: '#e74c3c', important: '#f39c12', normal: '#3498db', low: '#95a5a6' };
+const API_BASE = location.origin + '/api/sync';
 
 function showToast(msg) {
   const t = document.getElementById('toast');
@@ -284,91 +358,114 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2000);
 }
 
-function loadTasks() {
+// ==================== 初始化 ====================
+function init() {
+  const saved = localStorage.getItem('memoSyncCode');
+  if (saved) {
+    syncCode = saved;
+    syncPassword = saved;
+    document.getElementById('setupOverlay').style.display = 'none';
+    showApp();
+    loadLocalData();
+    renderCalendar();
+    syncNow(true);
+  }
+}
+
+function doSetup() {
+  const code = document.getElementById('setupCode').value.trim();
+  if (code.length < 4) { showToast('同步码至少4位'); return; }
+  syncCode = code;
+  syncPassword = code;
+  localStorage.setItem('memoSyncCode', syncCode);
+  document.getElementById('setupOverlay').style.display = 'none';
+  showApp();
+  tasks = {};
+  saveLocalData();
+  renderCalendar();
+  showToast('同步码已设置: ' + syncCode);
+}
+
+function showApp() {
+  document.getElementById('syncBar').style.display = 'flex';
+  document.getElementById('appHeader').style.display = 'flex';
+  document.getElementById('weekdays').style.display = 'grid';
+  document.getElementById('legend').style.display = 'flex';
+  document.getElementById('syncCode').textContent = syncCode;
+}
+
+function loadLocalData() {
   try {
-    const saved = localStorage.getItem('memoTasks');
+    const saved = localStorage.getItem('memoTasks_' + syncCode);
     if (saved) tasks = JSON.parse(saved);
   } catch(e) { tasks = {}; }
-  updateSyncUI();
 }
 
-function saveTasks() {
-  localStorage.setItem('memoTasks', JSON.stringify(tasks));
-  updateSyncUI();
+function saveLocalData() {
+  localStorage.setItem('memoTasks_' + syncCode, JSON.stringify(tasks));
 }
 
-function updateSyncUI() {
-  const codeEl = document.getElementById('syncCode');
+// ==================== 云端同步 ====================
+async function syncNow(silent) {
   const btn = document.getElementById('syncBtn');
   const status = document.getElementById('syncStatus');
   const text = document.getElementById('syncText');
-  if (syncCode) {
-    codeEl.textContent = syncCode;
-    codeEl.style.display = 'inline';
-    btn.textContent = '同步数据';
-    status.classList.remove('offline');
-    text.textContent = '已绑定同步码';
-  } else {
-    codeEl.style.display = 'none';
-    btn.textContent = '生成同步码';
-    status.classList.add('offline');
-    text.textContent = '本地存储';
-  }
-}
 
-function generateCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return code;
-}
+  btn.disabled = true;
+  status.className = 'sync-status syncing';
+  text.textContent = '同步中...';
 
-async function toggleSync() {
-  const btn = document.getElementById('syncBtn');
-  if (!syncCode) {
-    syncCode = generateCode();
-    localStorage.setItem('memoSyncCode', syncCode);
-    await uploadData();
-    updateSyncUI();
-    showToast('同步码: ' + syncCode + '，请在其他设备输入');
-  } else {
-    btn.disabled = true;
-    btn.textContent = '同步中...';
-    await downloadData();
-    btn.disabled = false;
-    updateSyncUI();
-  }
-}
+  try {
+    // 1. 先上传本地数据
+    const payload = JSON.stringify({ data: tasks, timestamp: Date.now() });
+    const encrypted = await ENC.encrypt(payload, syncPassword);
 
-async function uploadData() {
-  if (!syncCode) return;
-  const payload = {
-    code: syncCode,
-    data: tasks,
-    timestamp: Date.now()
-  };
-  localStorage.setItem('memoCloud_' + syncCode, JSON.stringify(payload));
-  showToast('数据已上传');
-}
+    const uploadRes = await fetch(API_BASE + '?code=' + encodeURIComponent(syncCode), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ payload: encrypted })
+    });
 
-async function downloadData() {
-  if (!syncCode) return;
-  const cloud = localStorage.getItem('memoCloud_' + syncCode);
-  if (cloud) {
-    try {
-      const payload = JSON.parse(cloud);
-      if (payload.data) {
-        tasks = payload.data;
-        saveTasks();
-        renderCalendar();
-        showToast('数据已同步');
-        return;
+    if (!uploadRes.ok) throw new Error('上传失败');
+
+    // 2. 再下载云端数据（合并逻辑：以时间戳较新的为准）
+    const downloadRes = await fetch(API_BASE + '?code=' + encodeURIComponent(syncCode));
+    if (downloadRes.ok) {
+      const result = await downloadRes.json();
+      if (result.payload) {
+        const decrypted = await ENC.decrypt(result.payload, syncPassword);
+        const cloudData = JSON.parse(decrypted);
+        if (cloudData.data && cloudData.timestamp) {
+          const localTime = parseInt(localStorage.getItem('memoSyncTime_' + syncCode) || '0');
+          if (cloudData.timestamp > localTime) {
+            tasks = cloudData.data;
+            saveLocalData();
+            localStorage.setItem('memoSyncTime_' + syncCode, cloudData.timestamp);
+            renderCalendar();
+            if (!silent) showToast('已同步云端数据');
+          } else {
+            if (!silent) showToast('本地数据已是最新');
+          }
+        }
+      } else {
+        if (!silent) showToast('云端暂无数据，已上传');
       }
-    } catch(e) {}
+    }
+
+    localStorage.setItem('memoSyncTime_' + syncCode, Date.now().toString());
+    status.className = 'sync-status online';
+    text.textContent = '已同步';
+  } catch(err) {
+    status.className = 'sync-status';
+    text.textContent = '同步失败';
+    if (!silent) showToast('同步失败: ' + err.message);
   }
-  showToast('暂无云端数据');
+
+  btn.disabled = false;
+  btn.textContent = '↻ 同步';
 }
 
+// ==================== 日历渲染 ====================
 function changeMonth(delta) {
   currentDate.setMonth(currentDate.getMonth() + delta);
   renderCalendar();
@@ -480,18 +577,20 @@ function saveTask() {
     tasks[selectedDateKey].push({ text: text, priority: selectedPriority });
     showToast('已添加');
   }
-  saveTasks();
+  saveLocalData();
   closeModal();
   renderCalendar();
+  syncNow(true);
 }
 
 function deleteTask(key, idx, e) {
   e.stopPropagation();
   tasks[key].splice(idx, 1);
   if (tasks[key].length === 0) delete tasks[key];
-  saveTasks();
+  saveLocalData();
   renderCalendar();
   showToast('已删除');
+  syncNow(true);
 }
 
 document.getElementById('modal').addEventListener('click', function(e) {
@@ -505,12 +604,7 @@ document.body.addEventListener('touchmove', function(e) {
   }
 }, { passive: false });
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('data:text/javascript;base64,' + btoa("self.addEventListener('install', e => self.skipWaiting());self.addEventListener('activate', e => e.waitUntil(clients.claim()));self.addEventListener('fetch', e => e.respondWith(fetch(e.request).catch(() => new Response('Offline'))));")).catch(function(){});
-}
-
-loadTasks();
-renderCalendar();
+init();
 </script>
 
 </body>
