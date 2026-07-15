@@ -30,7 +30,7 @@ export default {
     }
 
     async function redisCommand(cmd, ...args) {
-      const res = await fetch(`${UPSTASH_URL}/${cmd}/${args.join('/')}`, {
+      const res = await fetch(`${UPSTASH_URL}/${cmd}/${args.map(a => encodeURIComponent(a)).join('/')}`, {
         headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
       });
       return res.json();
@@ -44,7 +44,7 @@ export default {
             status: 400, headers: corsHeaders
           });
         }
-        await redisCommand('set', key, encodeURIComponent(body.payload));
+        await redisCommand('set', key, body.payload);
         return new Response(JSON.stringify({ success: true }), {
           status: 200, headers: corsHeaders
         });
@@ -59,7 +59,7 @@ export default {
       const result = await redisCommand('get', key);
       if (result.result) {
         return new Response(JSON.stringify({
-          payload: decodeURIComponent(result.result)
+          payload: result.result
         }), { status: 200, headers: corsHeaders });
       }
       return new Response(JSON.stringify({ payload: null }), {
